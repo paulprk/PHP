@@ -5,9 +5,12 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Factory\AppFactory;
 
 require __DIR__ . '/vendor/autoload.php';
+//require __DIR__ . '/db.php';
+
 
 $app = AppFactory::create();
 $app->addRoutingMiddleware();
+$app->addBodyParsingMiddleware();
 $app->addErrorMiddleware(true, true, true);
 $app->add( function ($request, $handler) {
     $response = $handler->handle($request);
@@ -21,5 +24,6 @@ $app->add( function ($request, $handler) {
 });
 
 // ACÁ VAN LOS ENDPOINTS
+require_once __DIR__ . '/routes/users.php';
 
 $app->run();
