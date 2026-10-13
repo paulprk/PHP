@@ -1,6 +1,7 @@
 Seminario de PHP, React, y API Rest
 ===================================
-
+@paul123    -> admin
+Admin123!   -> password
 ## Configuración inicial
 
 1. Crear archivo `.env` a partir de `.env.dist`
