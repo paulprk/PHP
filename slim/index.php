@@ -27,5 +27,6 @@ $app->add( function ($request, $handler) {
 require_once __DIR__ . '/middleware.php';
 require_once __DIR__ . '/users.php';
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/chats.php';
 
 $app->run();
