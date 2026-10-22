@@ -1,5 +1,4 @@
 <?php
-
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
@@ -7,7 +6,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 /** @var \Closure $authMiddleware */
 
 require_once __DIR__ . '/db.php';
-require_once __DIR__ . '/middleware.php';
+require_once __DIR__ . '/validaciones.php';
 
 /** Escribe una respuesta JSON manteniendo el estilo del resto de la API. */
 function responderChat(Response $response, array $datos, int $status = 200): Response
@@ -40,15 +39,22 @@ function buscarChatEntreUsuarios(PDO $db, int $usuarioA, int $usuarioB): array|f
 // Crea un chat y su primer mensaje si no existe, o agrega un mensaje a un chat existente.
 $app->post('/chats/{user_id}', function (Request $request, Response $response, array $args) {
     $logueado = (int) $request->getAttribute('auth_id');
-    $userId = filter_var($args['user_id'] ?? null, FILTER_VALIDATE_INT);
+    $userId = parsearId($args['user_id'] ?? null);          // entero >= 1, o null si no es válido
     $data = $request->getParsedBody() ?? [];
     $mensaje = $data['mensaje'] ?? null;
 
-    if ($userId === false || $userId < 1) {
+    if ($userId === null) {
         return responderChat($response, ['user_id' => 'Debe ser un ID válido'], 400);
     }
-    if (!is_string($mensaje) || trim($mensaje) === '' || mb_strlen($mensaje) < 1 || mb_strlen($mensaje) > 255) {
-        return responderChat($response, ['mensaje' => 'Debe ser un texto de 1 a 255 caracteres'], 400);
+
+    // CAMBIO: no se puede escribir a uno mismo.
+    if ($userId === $logueado) {
+        return responderChat($response, ['user_id' => 'No podés enviarte mensajes a vos mismo'], 400);
+    }
+
+    $errorMensaje = validarTextoMensaje($mensaje);
+    if ($errorMensaje !== null) {
+        return responderChat($response, ['mensaje' => $errorMensaje], 400);
     }
 
     try {
@@ -63,8 +69,9 @@ $app->post('/chats/{user_id}', function (Request $request, Response $response, a
             return responderChat($response, ['error' => 'Usuario no encontrado'], 404);
         }
 
-        $chat = buscarChatEntreUsuarios($db, $logueado, (int) $userId);
+        $chat = buscarChatEntreUsuarios($db, $logueado, $userId);
         if (!$chat) {
+            // No hay chat entre los dos: se crea, con el nombre del destinatario y descripción vacía.
             $stmt = $db->prepare(
                 'INSERT INTO chat (creado_por, usuario_id, nombre, descripcion)
                  VALUES (:creado_por, :usuario_id, :nombre, \'\')'
@@ -116,7 +123,7 @@ $app->post('/chats/{user_id}', function (Request $request, Response $response, a
             'mensaje' => 'Mensaje enviado correctamente',
             'chat_id' => $chatId,
             'mensaje_id' => $mensajeId,
-        ], 201);
+        ], 200);
     } catch (PDOException $e) {
         if (isset($db) && $db->inTransaction()) {
             $db->rollBack();
@@ -172,48 +179,53 @@ $app->get('/chats', function (Request $request, Response $response) {
 // Modifica los datos del chat entre el usuario autenticado y el usuario indicado.
 $app->put('/chats/{user_id}', function (Request $request, Response $response, array $args) {
     $logueado = (int) $request->getAttribute('auth_id');
-    $userId = filter_var($args['user_id'] ?? null, FILTER_VALIDATE_INT);
-    if ($userId === false || $userId < 1) {
+    $userId = parsearId($args['user_id'] ?? null);
+    if ($userId === null) {
         return responderChat($response, ['user_id' => 'Debe ser un ID válido'], 400);
     }
 
     $data = $request->getParsedBody() ?? [];
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    // Se modifican solo los campos que llegaron.
     $permitidos = ['nombre', 'descripcion', 'esta_bloqueado', 'color'];
-    $camposPresentes = array_values(array_intersect($permitidos, array_keys($data)));
+    $camposPresentes = array_intersect($permitidos, array_keys($data));
     if (!$camposPresentes) {
         return responderChat($response, ['error' => 'Debe indicar al menos un campo para modificar'], 400);
     }
 
+    // Cada validador devuelve null si está bien, o el mensaje de error de ese campo.
     $errores = [];
     if (array_key_exists('nombre', $data)) {
-        if (!is_string($data['nombre']) || mb_strlen($data['nombre']) < 3 || mb_strlen($data['nombre']) > 15 || !preg_match('/^[\p{L}\p{N}]+$/u', $data['nombre'])) {
-            $errores['nombre'] = 'Debe contener entre 3 y 15 letras o números, sin espacios';
+        $error = validarNombreChat($data['nombre']);
+        if ($error !== null) {
+            $errores['nombre'] = $error;
         }
     }
     if (array_key_exists('descripcion', $data)) {
-        if (!is_string($data['descripcion']) || mb_strlen($data['descripcion']) < 20 || mb_strlen($data['descripcion']) > 40 || !preg_match('/^[\p{L}\p{N}]+$/u', $data['descripcion'])) {
-            $errores['descripcion'] = 'Debe contener entre 20 y 40 letras o números, sin espacios';
+        $error = validarDescripcionChat($data['descripcion']);
+        if ($error !== null) {
+            $errores['descripcion'] = $error;
         }
     }
     if (array_key_exists('color', $data)) {
-        if (!is_string($data['color']) || !preg_match('/^#[0-9a-fA-F]{6}$/', $data['color'])) {
-            $errores['color'] = 'Debe ser un código hexadecimal de seis dígitos, por ejemplo #FF8800';
+        $error = validarColor($data['color']);
+        if ($error !== null) {
+            $errores['color'] = $error;
         }
     }
 
+    // esta_bloqueado se convierte a 1 o 0 (o null si no es un valor válido).
     $bloqueadoSolicitado = null;
     if (array_key_exists('esta_bloqueado', $data)) {
-        $valor = $data['esta_bloqueado'];
-        if (is_bool($valor)) {
-            $bloqueadoSolicitado = $valor ? 1 : 0;
-        } elseif (in_array($valor, [0, 1, '0', '1'], true)) {
-            $bloqueadoSolicitado = (int) $valor;
-        } elseif (is_string($valor) && in_array(strtolower($valor), ['true', 'false'], true)) {
-            $bloqueadoSolicitado = strtolower($valor) === 'true' ? 1 : 0;
-        } else {
+        $bloqueadoSolicitado = normalizarBooleano($data['esta_bloqueado']);
+        if ($bloqueadoSolicitado === null) {
             $errores['esta_bloqueado'] = 'Debe ser true o false';
         }
     }
+
     if ($errores) {
         return responderChat($response, $errores, 400);
     }
@@ -221,17 +233,19 @@ $app->put('/chats/{user_id}', function (Request $request, Response $response, ar
     try {
         $db = getDB();
         $db->beginTransaction();
-        $chat = buscarChatEntreUsuarios($db, $logueado, (int) $userId);
+        $chat = buscarChatEntreUsuarios($db, $logueado, $userId);
         if (!$chat) {
             $db->rollBack();
             return responderChat($response, ['error' => 'No existe un chat entre esos usuarios'], 404);
         }
 
+        // Una vez bloqueado, un chat no se puede desbloquear.
         if ((int) $chat['esta_bloqueado'] === 1 && $bloqueadoSolicitado === 0) {
             $db->rollBack();
             return responderChat($response, ['esta_bloqueado' => 'Un chat bloqueado no se puede desbloquear'], 409);
         }
 
+        // UPDATE dinámico: solo las columnas que llegaron.
         $actualizaciones = [];
         $parametros = ['id_chat' => (int) $chat['id']];
         foreach (['nombre', 'descripcion', 'color'] as $campo) {
@@ -262,27 +276,36 @@ $app->put('/chats/{user_id}', function (Request $request, Response $response, ar
 /** Devuelve mensajes en orden cronológico, seleccionando primero los más recientes. */
 $obtenerHistoriaChat = function (Request $request, Response $response, array $args, ?string $quantityArg = null) {
     $logueado = (int) $request->getAttribute('auth_id');
-    $userId = filter_var($args['user_id'] ?? null, FILTER_VALIDATE_INT);
-    if ($userId === false || $userId < 1) {
+    $userId = parsearId($args['user_id'] ?? null);
+    if ($userId === null) {
         return responderChat($response, ['user_id' => 'Debe ser un ID válido'], 400);
     }
 
-    $quantityRaw = $quantityArg ?? '5';
-    if (!preg_match('/^\d+$/', $quantityRaw) || (int) $quantityRaw < 1 || (int) $quantityRaw > 10) {
-        return responderChat($response, ['quantity' => 'Debe ser un número entre 1 y 10'], 400);
-    }
-    $quantity = (int) $quantityRaw;
-
+    // Se acumulan los errores de quantity y offset para avisar de los dos juntos.
+    $quantityRaw = $quantityArg ?? '5';                       // por defecto, 5 mensajes
     $queryParams = $request->getQueryParams();
     $offsetRaw = $queryParams['offset'] ?? '0';
-    if (!is_scalar($offsetRaw) || !preg_match('/^\d+$/', (string) $offsetRaw)) {
-        return responderChat($response, ['offset' => 'Debe ser un entero mayor o igual a 0'], 400);
+
+    $errores = [];
+    $errorQuantity = validarEnteroEnRango($quantityRaw, 1, 10);   // entre 1 y 10
+    if ($errorQuantity !== null) {
+        $errores['quantity'] = $errorQuantity;
     }
+    $errorOffset = validarEnteroEnRango($offsetRaw, 0);           // 0 o más
+    if ($errorOffset !== null) {
+        $errores['offset'] = $errorOffset;
+    }
+    if ($errores) {
+        return responderChat($response, $errores, 400);
+    }
+
+    // Ya validados: es seguro convertirlos y escribirlos en el SQL.
+    $quantity = (int) $quantityRaw;
     $offset = (int) $offsetRaw;
 
     try {
         $db = getDB();
-        $chat = buscarChatEntreUsuarios($db, $logueado, (int) $userId);
+        $chat = buscarChatEntreUsuarios($db, $logueado, $userId);
         if (!$chat) {
             return responderChat($response, ['error' => 'No existe un chat entre esos usuarios'], 404);
         }
@@ -295,15 +318,15 @@ $obtenerHistoriaChat = function (Request $request, Response $response, array $ar
              LIMIT ' . $quantity . ' OFFSET ' . $offset
         );
         $stmt->execute(['chat_id' => (int) $chat['id']]);
-        $mensajes = $stmt->fetchAll();
-        $mensajes = array_reverse($mensajes);
+        // Se traen los más recientes primero y se invierten: salen del más antiguo al más reciente.
+        $mensajes = array_reverse($stmt->fetchAll());
         return responderChat($response, ['mensajes' => $mensajes]);
     } catch (PDOException $e) {
         return responderChat($response, ['error' => 'No se pudo obtener la historia del chat'], 409);
     }
 };
 
-// Ruta solicitada con cantidad explícita y variante sin cantidad (por defecto, 5 mensajes).
+// Ruta con cantidad explícita y variante sin cantidad (por defecto, 5 mensajes).
 $app->get('/chats/{user_id}/historia', function (Request $request, Response $response, array $args) use ($obtenerHistoriaChat) {
     return $obtenerHistoriaChat($request, $response, $args);
 })->add($authMiddleware);

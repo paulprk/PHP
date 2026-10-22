@@ -100,3 +100,100 @@ function puedeAccederAUsurio($userId,$request)
     $esAdmin = (int) $request->getAttribute('auth_admin') === 1;
     return $userId === $logueado || $esAdmin;
 }
+
+function parsearId($valor): ?int
+{
+    $id = filter_var($valor, FILTER_VALIDATE_INT);
+    if ($id === false || $id < 1) {
+        return null;
+    }
+    return $id;
+}
+
+/**
+ * Texto de un mensaje de chat: de 1 a 255 caracteres, y no solo espacios.
+ */
+function validarTextoMensaje($mensaje): ?string
+{
+    if (!is_string($mensaje) || trim($mensaje) === '' || mb_strlen($mensaje) > 255) {
+        return 'Debe ser un texto de 1 a 255 caracteres';
+    }
+    return null;
+}
+
+/**
+ * Nombre de un chat: letras y números, de 3 a 15 caracteres (con espacios).
+ */
+function validarNombreChat($nombre): ?string
+{
+    if (!is_string($nombre) || trim($nombre) === '' 
+    || mb_strlen($nombre) < 3 || mb_strlen($nombre) > 15
+    || !preg_match('/^[\p{L}\p{N} ]+$/u', $nombre)) {
+        return 'Debe contener entre 3 y 15 letras, numeros o espacios';
+    }
+    return null;
+}
+
+/**
+ * Descripción de un chat: letras y números, de 20 a 40 caracteres (con espacios).
+ */
+function validarDescripcionChat($descripcion): ?string
+{
+    if (!is_string($descripcion) || trim($descripcion) === ''
+        || mb_strlen($descripcion) < 20 || mb_strlen($descripcion) > 40
+        || !preg_match('/^[\p{L}\p{N} ]+$/u', $descripcion)) {
+        return 'Debe contener entre 20 y 40 letras, numeros o espacios';
+    }
+    return null;
+}
+
+/**
+ * Color en hexadecimal de seis dígitos, por ejemplo #FF8800.
+ */
+function validarColor($color): ?string
+{
+    if (!is_string($color) || !preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
+        return 'Debe ser un código hexadecimal de seis dígitos, por ejemplo #FF8800';
+    }
+    return null;
+}
+
+/**
+ * Convierte un "sí/no" que puede llegar de muchas formas a 1 o 0.
+ * Acepta true/false, 0/1, "0"/"1" y "true"/"false". Devuelve 1, 0 o null si no es válido.
+ * Sirve para esta_bloqueado (chats) y también serviría para es_publico (usuarios).
+ */
+function normalizarBooleano($valor): ?int
+{
+    if (is_bool($valor)) {
+        return $valor ? 1 : 0;
+    }
+    if (in_array($valor, [0, 1, '0', '1'], true)) {
+        return (int) $valor;
+    }
+    if (is_string($valor) && in_array(strtolower($valor), ['true', 'false'], true)) {
+        return strtolower($valor) === 'true' ? 1 : 0;
+    }
+    return null;
+}
+
+/**
+ * Entero (que llega como texto) dentro de un rango. Pasa $max = null si no tiene tope.
+ *   validarEnteroEnRango("5", 1, 10)  → null (ok)
+ *   validarEnteroEnRango("0", 0)      → null (ok: sirve para offset)
+ */
+function validarEnteroEnRango($valor, int $min, ?int $max = null): ?string
+{
+    $mensaje = $max === null
+        ? "Debe ser un entero mayor o igual a $min"
+        : "Debe ser un número entre $min y $max";
+
+    if (!is_scalar($valor) || !preg_match('/^\d+$/', (string) $valor)) {
+        return $mensaje;
+    }
+    $n = (int) $valor;
+    if ($n < $min || ($max !== null && $n > $max)) {
+        return $mensaje;
+    }
+    return null;
+}
